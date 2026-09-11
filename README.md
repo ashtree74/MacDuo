@@ -11,6 +11,11 @@ effect unfolds back into the live desktop.
 Everything is driven live by the MacBook's hidden lid angle sensor. No animation timing — the
 effect follows your hand.
 
+![The effect: the live desktop folds away as the lid closes](docs/demo.gif)
+
+*Demo run (simulated lid sweep 120° → 3° → 120°): the far edge recedes, blurs and fades to
+black while the hinge edge stays sharp. Recorded on the built-in display at 120 fps.*
+
 ## What the iPhone Duo does
 
 The Duo does not cut between its outer and inner displays. The UI on the folding half is
@@ -113,6 +118,8 @@ Requires macOS 14+ and an Apple Silicon MacBook (for the sensor; the demo works 
 
 On launch a status window shows a live gauge of the lid angle (side profile of the laptop with
 the trigger angle marked), the three checks the effect needs, and tuning sliders:
+
+<img src="docs/status-window.png" alt="MacDuo status window" width="480">
 
 - lid angle sensor found,
 - **Screen Recording** permission (System Settings → Privacy & Security → Screen Recording;
