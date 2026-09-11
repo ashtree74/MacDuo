@@ -104,11 +104,19 @@ update. One gotcha: the `IOHIDManager` must be kept alive as long as the device 
 Only the **built-in display** is ever captured or covered (`CGDisplayIsBuiltin`); external
 screens are untouched. The startup log lists every display and which one is used.
 
+## Download
+
+Prebuilt, Developer ID-signed DMGs are on the [Releases page](https://github.com/ashtree74/MacDuo/releases).
+Open the DMG and drag MacDuo to Applications. Until a release is notarized, macOS will refuse the
+first launch: go to System Settings → Privacy & Security and click **Open Anyway**, or run
+`xattr -d com.apple.quarantine /Applications/MacDuo.app`.
+
 ## Build & run
 
 ```sh
 ./build.sh              # builds build/MacDuo.app with swiftc — no Xcode project
 open build/MacDuo.app   # lives in the menu bar (∠), no Dock icon
+./release.sh 0.1.0      # signed DMG + GitHub release (NOTARY_PROFILE=<keychain profile> to notarize)
 ```
 
 Requires macOS 14+ and an Apple Silicon MacBook (for the sensor; the demo works anywhere).
