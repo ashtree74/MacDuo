@@ -1,5 +1,7 @@
 # MacDuo
 
+**Website:** https://experiments.frontierslab.ai/macduo/
+
 ![MacBook with the lid half closed: the screen content folds away, blurred and darkened towards the far edge](docs/hero.jpg)
 
 The iPhone Duo "lid closing" transition, recreated on a MacBook.

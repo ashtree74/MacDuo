@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacDuo — the screen stays where it was</title>
+<meta name="description" content="The iPhone Duo lid-closing transition on a MacBook. Live screen capture re-projected with an eye-centered homography, driven by the hidden lid angle sensor.">
+<meta property="og:title" content="MacDuo">
+<meta property="og:description" content="Close the lid. The screen stays where it was.">
+<meta property="og:image" content="https://experiments.frontierslab.ai/macduo/hero.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M6 26h20' stroke='%23EDEEF2' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M8 26 16 5' stroke='%23F2B441' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0B0D12;
+    --card: #151922;
+    --line: rgba(237, 238, 242, 0.09);
+    --paper: #EDEEF2;
+    --muted: rgba(237, 238, 242, 0.62);
+    --amber: #F2B441;
+    --blue: #6DA8FF;
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
+  .wrap { width: min(1080px, 100% - 48px); margin-inline: auto; }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    position: relative;
+    min-height: 100svh;
+    display: grid;
+    align-items: end;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .hero img {
+    position: absolute; inset: 0; z-index: -2;
+    width: 100%; height: 100%; object-fit: cover; object-position: center 40%;
+    transform: scale(1.04);
+    animation: settle 2.4s cubic-bezier(.2,.7,.2,1) both;
+  }
+  .hero::after {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      linear-gradient(to top, var(--ink) 0%, rgba(11,13,18,.85) 26%, rgba(11,13,18,0) 62%),
+      linear-gradient(to right, rgba(11,13,18,.55), rgba(11,13,18,0) 50%);
+  }
+  .hero .wrap { padding-block: 0 72px; animation: rise 1.2s .3s cubic-bezier(.2,.7,.2,1) both; }
+  .brand {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "SOFT" 60;
+    font-weight: 800;
+    font-size: clamp(64px, 11vw, 148px);
+    line-height: .9;
+    letter-spacing: -0.035em;
+    margin: 0 0 20px;
+  }
+  .brand em { font-style: italic; font-weight: 400; color: var(--amber); }
+  .lede {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 40, "SOFT" 30;
+    font-weight: 400;
+    font-size: clamp(22px, 3vw, 32px);
+    line-height: 1.25;
+    max-width: 22ch;
+    margin: 0 0 32px;
+    text-wrap: balance;
+  }
+  .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 12px;
+    padding: 16px 22px 16px 18px;
+    border-radius: 999px;
+    background: var(--paper); color: var(--ink);
+    font-weight: 600; text-decoration: none;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1), box-shadow .25s;
+    box-shadow: 0 10px 40px -12px rgba(242,180,65,.45);
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 18px 50px -14px rgba(242,180,65,.65); }
+  .btn svg { width: 22px; height: 22px; flex: none; }
+  .btn small { font-weight: 500; opacity: .6; font-size: 13px; margin-left: 2px; }
+  .ghost { color: var(--muted); text-decoration: none; font-weight: 500; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+  .ghost:hover { color: var(--paper); border-color: var(--muted); }
+  .req { width: 100%; font-size: 13px; color: var(--muted); font-family: var(--mono); letter-spacing: .01em; }
+
+  /* ---------- Sections ---------- */
+  section { padding-block: 96px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--amber); margin: 0 0 14px;
+  }
+  h2 {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 96, "SOFT" 40;
+    font-weight: 600; font-size: clamp(34px, 5vw, 56px); line-height: 1.02; letter-spacing: -0.02em;
+    margin: 0 0 22px; max-width: 18ch; text-wrap: balance;
+  }
+  p { margin: 0 0 1em; max-width: 60ch; }
+  .muted { color: var(--muted); }
+
+  /* ---------- Fold demo (the signature) ---------- */
+  .demo {
+    display: grid; grid-template-columns: 1.25fr .75fr; gap: 48px; align-items: center;
+  }
+  .stage {
+    perspective: 1100px; perspective-origin: 50% 55%;
+    aspect-ratio: 16 / 10.4;
+    background: radial-gradient(120% 80% at 50% 110%, rgba(109,168,255,.10), transparent 60%);
+    border-radius: 18px;
+    overflow: visible;
+  }
+  .screen {
+    --fold: 0;      /* degrees, 0..66 */
+    --p: 0;         /* progress 0..1 */
+    position: relative; width: 100%; height: 100%;
+    transform-origin: 50% 100%;
+    transform: rotateX(calc(var(--fold) * -1deg)) scaleY(calc(1 + var(--p) * 0.55));
+    transform-style: preserve-3d;
+    will-change: transform;
+  }
+  .screen > * { position: absolute; inset: 0; border-radius: 12px; }
+  .screen .base {
+    background: #1b2130 url("status-window.png") center / contain no-repeat;
+    box-shadow: 0 30px 80px -30px rgba(0,0,0,.9), inset 0 0 0 1px var(--line);
+  }
+  .screen .blur { background: inherit; background-image: url("status-window.png"); background-size: contain; background-position: center; background-repeat: no-repeat; background-color: #1b2130; }
+  .screen .blur-a { filter: blur(calc(var(--p) * 6px)); -webkit-mask-image: linear-gradient(to top, transparent 15%, #000 55%); mask-image: linear-gradient(to top, transparent 15%, #000 55%); }
+  .screen .blur-b { filter: blur(calc(var(--p) * 22px)); -webkit-mask-image: linear-gradient(to top, transparent 45%, #000 90%); mask-image: linear-gradient(to top, transparent 45%, #000 90%); inset: -12px; border-radius: 20px; }
+  .screen .dark { background: linear-gradient(to top, transparent 20%, rgba(11,13,18,.65) 65%, var(--ink) 100%); opacity: var(--p); inset: -12px; }
+  .screen .hinge { background: linear-gradient(to top, rgba(11,13,18,.7), transparent 30%); opacity: calc(var(--p) * 1.5); }
+  .readout { font-family: var(--mono); font-size: 14px; color: var(--muted); display: grid; gap: 6px; margin-top: 22px; }
+  .readout b { color: var(--paper); font-weight: 500; }
+  .slider { display: grid; gap: 10px; margin-top: 28px; }
+  .slider label { font-size: 14px; color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--amber); }
+  .angle {
+    font-family: var(--display); font-variation-settings: "opsz" 144, "SOFT" 60; font-weight: 700;
+    font-size: clamp(64px, 8vw, 104px); line-height: 1; letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums; margin: 0;
+  }
+  .angle span { color: var(--amber); }
+  .state { font-family: var(--mono); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--blue); margin-top: 8px; min-height: 1.4em; }
+
+  /* ---------- How ---------- */
+  .how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 44px; }
+  .how article { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 26px 26px 20px; }
+  .how h3 { font-family: var(--display); font-variation-settings: "opsz" 48, "SOFT" 40; font-weight: 600; font-size: 24px; margin: 0 0 10px; letter-spacing: -0.01em; }
+  .how p { font-size: 15.5px; color: var(--muted); margin: 0; }
+  .how p + p { margin-top: .8em; }
+  .formula {
+    font-family: var(--mono); font-size: 14px; line-height: 1.7; color: var(--paper);
+    background: rgba(109,168,255,.07); border: 1px solid rgba(109,168,255,.18);
+    border-radius: 12px; padding: 14px 16px; margin-top: 16px; overflow-x: auto; white-space: nowrap;
+  }
+  .formula i { color: var(--amber); font-style: normal; }
+
+  /* ---------- Window ---------- */
+  .window { display: grid; grid-template-columns: .9fr 1.1fr; gap: 56px; align-items: center; }
+  .window img { width: 100%; max-width: 420px; border-radius: 14px; box-shadow: 0 40px 90px -40px rgba(0,0,0,.9); justify-self: center; }
+  .checks { list-style: none; padding: 0; margin: 20px 0 0; display: grid; gap: 10px; color: var(--muted); }
+  .checks li::before { content: "—"; color: var(--amber); margin-right: 12px; }
+
+  /* ---------- Footer ---------- */
+  footer { border-top: 1px solid var(--line); padding: 44px 0 64px; }
+  .sig { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 18px; align-items: baseline; }
+  .sig .name { font-family: var(--display); font-variation-settings: "opsz" 40, "SOFT" 60; font-style: italic; font-size: 24px; }
+  .sig .name a { text-decoration: none; }
+  .sig .name a:hover { color: var(--amber); }
+  .links { display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  .links a { text-decoration: none; }
+  .links a:hover { color: var(--paper); }
+
+  @keyframes settle { from { transform: scale(1.12); opacity: 0; } to { transform: scale(1.04); opacity: 1; } }
+  @keyframes rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  @media (max-width: 860px) {
+    .demo, .window, .how { grid-template-columns: 1fr; }
+    .window img { max-width: 100%; }
+    section { padding-block: 72px; }
+    .hero .wrap { padding-bottom: 56px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero img, .hero .wrap { animation: none; }
+    .btn { transition: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <img src="hero.jpg" alt="A MacBook with the lid half closed. The screen content folds away, blurred and darkened towards the far edge." fetchpriority="high">
+  <div class="wrap">
+    <h1 class="brand">Mac<em>Duo</em></h1>
+    <p class="lede">Close the lid. The screen stays where it was.</p>
+    <div class="cta">
+      <a class="btn" id="download" href="https://github.com/ashtree74/MacDuo/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+        Download for Mac <small id="version">DMG</small>
+      </a>
+      <a class="ghost" href="https://github.com/ashtree74/MacDuo">Source on GitHub</a>
+      <span class="req">Apple Silicon MacBook · macOS 14+ · signed &amp; notarized · lives in the menu bar</span>
+    </div>
+  </div>
+</header>
+
+<section id="try">
+  <div class="wrap">
+    <p class="eyebrow">Try the fold</p>
+    <div class="demo">
+      <div>
+        <div class="stage" aria-hidden="true">
+          <div class="screen" id="screen">
+            <div class="base"></div>
+            <div class="blur blur-a"></div>
+            <div class="blur blur-b"></div>
+            <div class="dark"></div>
+            <div class="hinge"></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="angle" id="angleOut">108<span>°</span></p>
+        <div class="state" id="state">lid open · watching</div>
+        <div class="slider">
+          <label for="angle">Lid angle — drag it like you'd close the lid</label>
+          <input type="range" id="angle" min="0" max="130" value="108" step="1" aria-label="Lid angle in degrees">
+        </div>
+        <div class="readout">
+          <div>trigger <b>100°</b> · full fold <b>25°</b></div>
+          <div>blur <b id="blurOut">0 pt</b> · fade <b id="fadeOut">0 %</b></div>
+        </div>
+        <p class="muted" style="margin-top:22px;font-size:15px">On a real MacBook this is driven by the lid angle sensor, and the picture is the live screen, not a screenshot. This is a CSS sketch of the same idea.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">What it does</p>
+    <h2>The picture doesn't rotate with the lid. It stays put in the room.</h2>
+    <p class="muted">Every MacBook since 2019 hides a lid angle sensor. MacDuo reads it, captures the built-in display live, and re-projects the picture every frame so that, from where you sit, it looks like the screen is still standing where it was while the glass folds through it. The far edge blurs and fades to black; the hinge edge stays sharp. Open the lid and it unfolds.</p>
+    <div class="how">
+      <article>
+        <h3>The sensor</h3>
+        <p>A hidden HID device (usage page 0x20, usage 0x8A) answers a feature report with the lid angle in whole degrees. No permission needed. A critically damped spring filter turns the 1° steps into motion that follows your hand.</p>
+      </article>
+      <article>
+        <h3>Live, not a screenshot</h3>
+        <p>A ScreenCaptureKit stream of the built-in display feeds IOSurface frames straight into the effect, with MacDuo's own windows excluded so it never captures itself. Cursor, video, animations — all still moving while folded. 120 fps on ProMotion.</p>
+      </article>
+      <article>
+        <h3>Not a rotation — a homography</h3>
+        <p>A central projection from your eye between two planes sharing the hinge: the lid where it was, and the lid where it is now. It's a planar homography that Core Animation renders exactly.</p>
+        <div class="formula">x₁ = <i>K</i>·x₀ / (<i>K</i> − b·y₀)<br>y₁ = c·y₀ / (<i>K</i> − b·y₀)<br><span class="muted">b = sin δ · c = −D · <i>K</i> = b(H/2 + e) − D cos δ</span></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="window">
+  <div class="wrap window">
+    <img src="status-window.png" alt="MacDuo status window: live lid angle gauge, permission checks, and tuning sliders" loading="lazy">
+    <div>
+      <p class="eyebrow">In the box</p>
+      <h2>A menu bar app that checks itself.</h2>
+      <p class="muted">Open it once. The status window shows the lid angle live, confirms the sensor, the Screen Recording permission and the built-in display, and lets you tune the feel.</p>
+      <ul class="checks">
+        <li>Trigger angle, projection strength, blur and eye height — saved between launches</li>
+        <li>A demo that sweeps the lid without touching it</li>
+        <li>Only the built-in display is ever captured or covered</li>
+        <li>Built with plain <code>swiftc</code>, no Xcode project; signed and notarized DMG</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap sig">
+    <div class="name">Made by <a href="https://github.com/ashtree74">Adam Jesionkiewicz</a></div>
+    <nav class="links" aria-label="Links">
+      <a href="https://github.com/ashtree74/MacDuo">Source</a>
+      <a href="https://github.com/ashtree74/MacDuo/releases">Releases</a>
+      <a href="https://github.com/ashtree74/MacDuo#its-not-a-rotation--its-a-homography">The math</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  // Latest DMG straight from GitHub releases; the button falls back to the releases page.
+  fetch("https://api.github.com/repos/ashtree74/MacDuo/releases/latest")
+    .then(r => r.ok ? r.json() : Promise.reject())
+    .then(rel => {
+      const dmg = (rel.assets || []).find(a => a.name.endsWith(".dmg"));
+      if (dmg) document.getElementById("download").href = dmg.browser_download_url;
+      document.getElementById("version").textContent = rel.tag_name.replace(/^v/, "") + " · DMG";
+    })
+    .catch(() => {});
+
+  // The fold sketch: same mapping as the app — trigger at 100°, full at 25°, strength 60%.
+  const START = 100, FULL = 25, STRENGTH = 0.6;
+  const screen = document.getElementById("screen");
+  const input = document.getElementById("angle");
+  const out = document.getElementById("angleOut"), state = document.getElementById("state");
+  const blurOut = document.getElementById("blurOut"), fadeOut = document.getElementById("fadeOut");
+  let target = +input.value, shown = target, raf = null;
+
+  function render(a) {
+    const raw = Math.max(0, Math.min(1, (START - a) / (START - FULL)));
+    const p = raw * raw * (3 - 2 * raw);
+    const fold = Math.min(66, Math.max(0, (START - a) * STRENGTH));
+    screen.style.setProperty("--fold", a < START ? fold : 0);
+    screen.style.setProperty("--p", p);
+    out.innerHTML = Math.round(a) + "<span>°</span>";
+    blurOut.textContent = Math.round(p * 120) + " pt";
+    fadeOut.textContent = Math.round(Math.min(1, p * 2) * 100) + " %";
+    state.textContent = a >= START ? "lid open · watching" : a <= FULL ? "folded · fully faded" : "folding · effect live";
+  }
+  function tick() {
+    shown += (target - shown) * 0.18;
+    if (Math.abs(target - shown) < 0.05) { shown = target; raf = null; } else raf = requestAnimationFrame(tick);
+    render(shown);
+  }
+  input.addEventListener("input", () => { target = +input.value; if (!raf) raf = requestAnimationFrame(tick); });
+  render(shown);
+</script>
+</body>
+</html>
