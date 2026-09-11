@@ -13,8 +13,6 @@ effect unfolds back into the live desktop.
 Everything is driven live by the MacBook's hidden lid angle sensor. No animation timing — the
 effect follows your hand.
 
-![The effect: the live desktop folds away as the lid closes](docs/demo.gif)
-
 ## What the iPhone Duo does
 
 The Duo does not cut between its outer and inner displays. The UI on the folding half is
