@@ -82,9 +82,11 @@ const screenMat = new THREE.ShaderMaterial({
   glslVersion: THREE.GLSL3,
   vertexShader: `
     out vec3 vWorld;
+    out vec2 vLid;
     void main() {
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vWorld = wp.xyz;
+      vLid = uv;                                   // position on the physical glass: y = 0 at the hinge, 1 at the far edge
       gl_Position = projectionMatrix * viewMatrix * wp;
     }`,
   fragmentShader: `
@@ -94,6 +96,7 @@ const screenMat = new THREE.ShaderMaterial({
     uniform vec2 size, texel;
     uniform float motion;
     in vec3 vWorld;
+    in vec2 vLid;
     out vec4 fragColor;
     void main() {
       // Intersect the fixed reference-eye ray with the screen plane at the trigger pose.
@@ -104,7 +107,10 @@ const screenMat = new THREE.ShaderMaterial({
       vec3 rel = eye + d * t - planeOrigin;
       vec2 sourceUV = vec2(dot(rel, planeU) / size.x + 0.5, dot(rel, planeV) / size.y);
 
-      float edge = clamp(sourceUV.y, 0.0, 1.0);               // distance from the hinge, in the source image
+      // Blur and darkening follow the distance from the hinge on the *glass*, so the far edge of whatever
+      // is visible is always the most blurred, and the whole lid keeps scaling with motion down to 0°.
+      // (The reference measures this in the source image; with a 90° fold that never runs out of range.)
+      float edge = clamp(vLid.y, 0.0, 1.0);
       float blurGradient = edge;
       float darkenGradient = clamp((edge - 0.2) / 0.8, 0.0, 1.0);
       float effect = motion * pow(darkenGradient, 1.35);
@@ -131,7 +137,8 @@ const screenMat = new THREE.ShaderMaterial({
           }
         }
       }
-      fragColor = vec4(color * (1.0 - min(1.0, effect * 2.0)), 1.0);
+      float off = smoothstep(0.85, 1.0, motion);              // the display goes dark in the last degrees
+      fragColor = vec4(color * (1.0 - min(1.0, effect * 2.0)) * (1.0 - off), 1.0);
     }`,
 });
 const screenGeo = new THREE.PlaneGeometry(W, H).translate(0, H / 2, 0.001);
