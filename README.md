@@ -150,7 +150,7 @@ degrees like the sensor), **Angle simulation slider**, **Back to the real sensor
 Run the binary directly to see the log and pass flags:
 
 ```sh
-build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 25 --eye-distance 2.6 --eye-height 0.5 \
+build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 0 --eye-distance 2.6 --eye-height 0.5 \
     --blur 120 --smooth 4.5 --demo --demo-seconds 3
 ```
 
@@ -158,7 +158,7 @@ build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 25 --eye-distance 2.6 
 |---|---|---|
 | `--start` | 100 | lid angle (°) that triggers the effect |
 | `--strength` | 0.6 | projection strength: 1 = exact eye geometry, lower = gentler |
-| `--full` | 25 | angle at which blur/fade are fully applied |
+| `--full` | 0 | angle at which blur/fade are fully applied (scales all the way to closed) |
 | `--eye-distance` | 2.6 | eye distance from the screen center, in screen heights (≈56 cm on a 16") |
 | `--eye-height` | 0.5 | eye height above the screen center, in screen heights |
 | `--blur` | 120 | max blur radius (pt) |

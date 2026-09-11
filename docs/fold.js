@@ -11,7 +11,7 @@
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
 
-const START = 100, FULL = 25;            // same numbers as the app
+const START = 100, FULL = 0;             // same numbers as the app: the effect scales all the way to the closed lid
 const W = 1.6, H = 1.0;                  // lid size, world units (16:10)
 
 const stage = document.getElementById("stage");

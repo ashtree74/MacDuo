@@ -20,7 +20,7 @@ import CoreImage
 
 struct Config {
     static var startAngle: Double = 100     // effect starts below this lid angle (deg)
-    static var fullAngle: Double = 25       // effect is "complete" at this angle (blur / fade fully applied)
+    static var fullAngle: Double = 0        // effect is "complete" at this angle (blur / fade fully applied) — scales all the way to the closed lid
     static var hysteresis: Double = 6       // lid must open this much above startAngle before the overlay dismisses
     static var eyeDistance: Double = 2.6    // eye distance from the screen center, in screen heights (16": H≈21.5 cm → ~56 cm)
     static var eyeHeight: Double = 0.5      // eye height above the screen center, along the screen, in screen heights
