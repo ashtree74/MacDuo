@@ -187,10 +187,10 @@ if (!matchMedia("(prefers-reduced-motion: reduce)").matches && "IntersectionObse
     const ease = x => 0.5 - 0.5 * Math.cos(Math.PI * x);
     (function sweep(now) {
       const e = now - t0; let a;
-      if (e < down) a = 108 - 105 * ease(e / down);
-      else if (e < down + hold) a = 3;
-      else if (e < down + hold + up) a = 3 + 105 * ease((e - down - hold) / up);
-      else { input.value = 108; target = 108; shown = 108; render(108); return; }
+      if (e < down) a = 100 - 100 * ease(e / down);
+      else if (e < down + hold) a = 0;
+      else if (e < down + hold + up) a = 100 * ease((e - down - hold) / up);
+      else { input.value = 100; target = 100; shown = 100; render(100); return; }
       input.value = Math.round(a); target = a; shown = a; render(a);
       requestAnimationFrame(sweep);
     })(t0);
