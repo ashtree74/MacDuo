@@ -1,5 +1,7 @@
 # MacDuo
 
+![MacBook with the lid half closed: the screen content folds away, blurred and darkened towards the far edge](docs/hero.jpg)
+
 The iPhone Duo "lid closing" transition, recreated on a MacBook.
 
 When you close the lid, the display captures itself — live, not a screenshot — and re-projects
