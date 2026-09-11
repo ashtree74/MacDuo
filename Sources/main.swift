@@ -24,6 +24,7 @@ struct Config {
     static var hysteresis: Double = 6       // lid must open this much above startAngle before the overlay dismisses
     static var eyeDistance: Double = 2.6    // eye distance from the screen center, in screen heights (16": H≈21.5 cm → ~56 cm)
     static var eyeHeight: Double = 0.5      // eye height above the screen center, along the screen, in screen heights
+    static var projectionStrength: Double = 0.6 // scales δ fed into the homography: 1 = exact geometry, lower = gentler
     static var maxBlur: Double = 120        // maximum blur radius (points)
     static var maxDarken: Double = 1.0      // maximum darkening (1 = fades to full black at the far edge)
     static var smoothHz: Double = 4.5       // natural frequency of the spring filter (Hz): lower = smoother, more lag
@@ -31,6 +32,22 @@ struct Config {
     static var demoSeconds: Double = 1.3    // closing/opening duration in the demo
     static var blurLevels = 5               // number of progressive blur layers (0 = no blur)
     static var trace = false                // log raw and smoothed angle every frame
+
+    /// Settings adjustable from the status window, persisted across launches.
+    static func load() {
+        let d = UserDefaults.standard
+        if d.object(forKey: "startAngle") != nil { startAngle = d.double(forKey: "startAngle") }
+        if d.object(forKey: "projectionStrength") != nil { projectionStrength = d.double(forKey: "projectionStrength") }
+        if d.object(forKey: "maxBlur") != nil { maxBlur = d.double(forKey: "maxBlur") }
+        if d.object(forKey: "eyeHeight") != nil { eyeHeight = d.double(forKey: "eyeHeight") }
+    }
+    static func save() {
+        let d = UserDefaults.standard
+        d.set(startAngle, forKey: "startAngle")
+        d.set(projectionStrength, forKey: "projectionStrength")
+        d.set(maxBlur, forKey: "maxBlur")
+        d.set(eyeHeight, forKey: "eyeHeight")
+    }
 }
 
 let logFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f }()
@@ -163,7 +180,7 @@ final class FoldOverlay {
         plane.addSublayer(sharp)
 
         // Transparent margin around the image so the gaussian spreads the image edges outward.
-        let pad = CGFloat(Config.maxBlur) * 2.5
+        let pad = CGFloat(max(Config.maxBlur, 160)) * 2.5
         let padded = plane.bounds.insetBy(dx: -pad, dy: -pad)
 
         for (fraction, from, to, rasterScale) in Self.levels.prefix(Config.blurLevels) {
@@ -273,7 +290,7 @@ final class FoldOverlay {
         let p = min(max(p, 0), 1)
         let e = p * p * (3 - 2 * p)   // soft start
         let H = Double(size.height)
-        let t = Self.homography(delta: delta, H: H, eyeDistance: Config.eyeDistance * H, eyeHeight: Config.eyeHeight * H)
+        let t = Self.homography(delta: delta * Config.projectionStrength, H: H, eyeDistance: Config.eyeDistance * H, eyeHeight: Config.eyeHeight * H)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         plane.transform = t
         for level in blurLevels {
@@ -288,67 +305,281 @@ final class FoldOverlay {
 
 // MARK: - Status window
 
-/// Startup window: shows whether everything the effect needs is in place, with a way to fix what isn't.
+/// Side profile of the laptop with a live lid angle, drawn with NSBezierPath.
+final class LidGaugeView: NSView {
+    var angle: Double = 108 { didSet { needsDisplay = true } }
+    var triggerAngle: Double = 100 { didSet { needsDisplay = true } }
+    var active = false { didSet { needsDisplay = true } }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 200, height: 150) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let hinge = NSPoint(x: bounds.midX - 50, y: 34)
+        let baseLen: CGFloat = 118, lidLen: CGFloat = 104
+        let accent = NSColor(red: 0.42, green: 0.66, blue: 1.0, alpha: 1)
+
+        // Base (keyboard deck).
+        let base = NSBezierPath()
+        base.lineWidth = 7; base.lineCapStyle = .round
+        base.move(to: hinge); base.line(to: NSPoint(x: hinge.x + baseLen, y: hinge.y))
+        NSColor.white.withAlphaComponent(0.85).setStroke(); base.stroke()
+
+        // Trigger marker: thin dashed lid at the trigger angle.
+        let ta = CGFloat(triggerAngle) * .pi / 180
+        let marker = NSBezierPath()
+        marker.lineWidth = 1.5
+        marker.setLineDash([3, 4], count: 2, phase: 0)
+        marker.move(to: hinge)
+        marker.line(to: NSPoint(x: hinge.x + cos(ta) * lidLen, y: hinge.y + sin(ta) * lidLen))
+        NSColor.systemOrange.withAlphaComponent(0.8).setStroke(); marker.stroke()
+
+        // Angle arc.
+        let arc = NSBezierPath()
+        arc.lineWidth = 3
+        arc.appendArc(withCenter: hinge, radius: 34, startAngle: 0, endAngle: CGFloat(angle), clockwise: false)
+        (active ? NSColor.systemOrange : accent).withAlphaComponent(0.9).setStroke(); arc.stroke()
+
+        // Lid with a glow along the screen face.
+        let a = CGFloat(angle) * .pi / 180
+        let tip = NSPoint(x: hinge.x + cos(a) * lidLen, y: hinge.y + sin(a) * lidLen)
+        let glow = NSBezierPath()
+        glow.lineWidth = 16; glow.lineCapStyle = .round
+        glow.move(to: hinge); glow.line(to: tip)
+        (active ? NSColor.systemOrange : accent).withAlphaComponent(0.22).setStroke(); glow.stroke()
+        let lid = NSBezierPath()
+        lid.lineWidth = 7; lid.lineCapStyle = .round
+        lid.move(to: hinge); lid.line(to: tip)
+        NSColor.white.setStroke(); lid.stroke()
+
+        // Hinge dot.
+        let dot = NSBezierPath(ovalIn: NSRect(x: hinge.x - 5, y: hinge.y - 5, width: 10, height: 10))
+        NSColor.black.setFill(); dot.fill()
+        NSColor.white.withAlphaComponent(0.9).setStroke(); dot.lineWidth = 2; dot.stroke()
+    }
+}
+
+/// Startup window: dark, glassy, with a live lid gauge, the three checks the effect needs, and tuning sliders.
 final class StatusWindow {
     let window: NSWindow
-    private let sensorRow = NSTextField(labelWithString: "")
-    private let captureRow = NSTextField(labelWithString: "")
-    private let displayRow = NSTextField(labelWithString: "")
-    private let angleRow = NSTextField(labelWithString: "")
-    private let grantButton = NSButton(title: "Open Screen Recording Settings…", target: nil, action: nil)
+    private let gauge = LidGaugeView()
+    private let angleLabel = NSTextField(labelWithString: "—")
+    private let angleCaption = NSTextField(labelWithString: "")
+    private var checkIcons: [NSImageView] = []
+    private var checkLabels: [NSTextField] = []
+    private let fixButton = NSButton(title: "Grant access…", target: nil, action: nil)
     private let hint = NSTextField(wrappingLabelWithString: "")
+    private let startSlider = NSSlider(value: Config.startAngle, minValue: 60, maxValue: 125, target: nil, action: nil)
+    private let strengthSlider = NSSlider(value: Config.projectionStrength, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let blurSlider = NSSlider(value: Config.maxBlur, minValue: 0, maxValue: 160, target: nil, action: nil)
+    private let eyeSlider = NSSlider(value: Config.eyeHeight, minValue: -0.5, maxValue: 1.5, target: nil, action: nil)
+    private var valueLabels: [NSSlider: NSTextField] = [:]
+    var onSettingsChanged: (() -> Void)?
 
     init(demoAction: Selector, target: AnyObject) {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 300),
-                          styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+                          styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "MacDuo"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = .clear
         window.center()
 
-        let title = NSTextField(labelWithString: "MacDuo — lid closing effect")
-        title.font = .systemFont(ofSize: 18, weight: .semibold)
-        let subtitle = NSTextField(wrappingLabelWithString:
-            "Close the lid below \(Int(Config.startAngle))° and the screen folds away like an iPhone Duo. Checks below must all pass.")
-        subtitle.textColor = .secondaryLabelColor
+        // Background: vibrancy + deep gradient + a soft radial glow behind the gauge.
+        let backdrop = NSVisualEffectView()
+        backdrop.material = .hudWindow
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .active
+        backdrop.wantsLayer = true
+        let tint = CAGradientLayer()
+        tint.colors = [NSColor(red: 0.04, green: 0.06, blue: 0.14, alpha: 0.92).cgColor,
+                       NSColor(red: 0.01, green: 0.01, blue: 0.03, alpha: 0.96).cgColor]
+        tint.startPoint = CGPoint(x: 0.2, y: 1); tint.endPoint = CGPoint(x: 0.8, y: 0)
+        tint.frame = NSRect(x: 0, y: 0, width: 480, height: 640)
+        tint.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        backdrop.layer?.addSublayer(tint)
+        let glow = CAGradientLayer()
+        glow.type = .radial
+        glow.colors = [NSColor(red: 0.3, green: 0.5, blue: 1.0, alpha: 0.28).cgColor, NSColor.clear.cgColor]
+        glow.startPoint = CGPoint(x: 0.5, y: 0.5); glow.endPoint = CGPoint(x: 1, y: 1)
+        glow.frame = NSRect(x: -60, y: 300, width: 380, height: 380)
+        backdrop.layer?.addSublayer(glow)
+        window.contentView = backdrop
 
-        for row in [sensorRow, captureRow, displayRow, angleRow] { row.font = .systemFont(ofSize: 13) }
-        hint.textColor = .secondaryLabelColor
+        // Header.
+        let title = NSTextField(labelWithString: "MacDuo")
+        title.font = .systemFont(ofSize: 34, weight: .heavy)
+        title.textColor = .white
+        let subtitle = NSTextField(wrappingLabelWithString: "iPhone Duo's lid-closing transition, driven live by your MacBook's lid angle sensor.")
+        subtitle.textColor = NSColor.white.withAlphaComponent(0.6)
+        subtitle.font = .systemFont(ofSize: 13)
+
+        // Gauge card.
+        angleLabel.font = .monospacedDigitSystemFont(ofSize: 44, weight: .bold)
+        angleLabel.textColor = .white
+        angleCaption.font = .systemFont(ofSize: 12, weight: .medium)
+        angleCaption.textColor = NSColor.white.withAlphaComponent(0.55)
+        let angleStack = NSStackView(views: [angleLabel, angleCaption])
+        angleStack.orientation = .vertical; angleStack.alignment = .leading; angleStack.spacing = 2
+        let gaugeRow = NSStackView(views: [gauge, angleStack])
+        gaugeRow.orientation = .horizontal; gaugeRow.spacing = 8; gaugeRow.alignment = .centerY
+        let gaugeCard = Self.card(gaugeRow)
+
+        // Checks card.
+        var checkRows: [NSView] = []
+        for _ in 0..<3 {
+            let icon = NSImageView()
+            icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+            icon.translatesAutoresizingMaskIntoConstraints = false
+            icon.widthAnchor.constraint(equalToConstant: 22).isActive = true
+            let label = NSTextField(labelWithString: "")
+            label.font = .systemFont(ofSize: 13, weight: .medium)
+            label.textColor = NSColor.white.withAlphaComponent(0.9)
+            label.lineBreakMode = .byTruncatingTail
+            let row = NSStackView(views: [icon, label])
+            row.orientation = .horizontal; row.spacing = 10
+            checkIcons.append(icon); checkLabels.append(label); checkRows.append(row)
+        }
+        fixButton.target = target
+        fixButton.action = #selector(Controller.openScreenRecordingSettings)
+        fixButton.bezelStyle = .rounded
+        fixButton.controlSize = .small
+        let fixRow = NSStackView(views: [NSView(), fixButton])
+        fixRow.orientation = .horizontal
         hint.font = .systemFont(ofSize: 11)
+        hint.textColor = NSColor.white.withAlphaComponent(0.5)
+        let checksStack = NSStackView(views: checkRows + [hint, fixRow])
+        checksStack.orientation = .vertical; checksStack.alignment = .leading; checksStack.spacing = 9
+        checksStack.setCustomSpacing(4, after: hint)
+        let checksCard = Self.card(checksStack)
 
-        grantButton.target = target
-        grantButton.action = #selector(Controller.openScreenRecordingSettings)
+        // Tuning card.
+        let tuningTitle = NSTextField(labelWithString: "TUNING")
+        tuningTitle.font = .systemFont(ofSize: 11, weight: .semibold)
+        tuningTitle.textColor = NSColor.white.withAlphaComponent(0.45)
+        let rows: [NSView] = [
+            tuningTitle,
+            sliderRow("Trigger angle", startSlider, target: target),
+            sliderRow("Projection strength", strengthSlider, target: target),
+            sliderRow("Blur", blurSlider, target: target),
+            sliderRow("Eye height", eyeSlider, target: target),
+        ]
+        let tuningStack = NSStackView(views: rows)
+        tuningStack.orientation = .vertical; tuningStack.alignment = .leading; tuningStack.spacing = 10
+        let tuningCard = Self.card(tuningStack)
+
+        // Footer.
         let demoButton = NSButton(title: "Run demo", target: target, action: demoAction)
+        demoButton.bezelStyle = .rounded
+        demoButton.controlSize = .large
         demoButton.keyEquivalent = "\r"
         let hideButton = NSButton(title: "Hide", target: window, action: #selector(NSWindow.orderOut(_:)))
-        let buttons = NSStackView(views: [grantButton, NSView(), demoButton, hideButton])
-        buttons.orientation = .horizontal
+        hideButton.bezelStyle = .rounded
+        hideButton.controlSize = .large
+        let footer = NSStackView(views: [NSView(), hideButton, demoButton])
+        footer.orientation = .horizontal; footer.spacing = 10
 
-        let stack = NSStackView(views: [title, subtitle, sensorRow, captureRow, displayRow, angleRow, hint, buttons])
+        let stack = NSStackView(views: [title, subtitle, gaugeCard, checksCard, tuningCard, footer])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.setCustomSpacing(16, after: subtitle)
-        stack.setCustomSpacing(16, after: hint)
-        buttons.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = stack
+        stack.spacing = 14
+        stack.edgeInsets = NSEdgeInsets(top: 44, left: 24, bottom: 22, right: 24)
+        stack.setCustomSpacing(4, after: title)
+        stack.setCustomSpacing(20, after: subtitle)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.addSubview(stack)
         NSLayoutConstraint.activate([
-            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            subtitle.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            hint.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            stack.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: backdrop.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor),
         ])
+        for v in [subtitle, gaugeCard, checksCard, tuningCard, footer] {
+            v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -48).isActive = true
+        }
+        for v in [gaugeRow, checksStack, tuningStack] as [NSView] {
+            v.widthAnchor.constraint(equalTo: v.superview!.widthAnchor, constant: -32).isActive = true
+        }
+        fixRow.widthAnchor.constraint(equalTo: checksStack.widthAnchor).isActive = true
+        hint.widthAnchor.constraint(equalTo: checksStack.widthAnchor).isActive = true
+        for r in rows.dropFirst() { r.widthAnchor.constraint(equalTo: tuningStack.widthAnchor).isActive = true }
+        refreshValues()
     }
 
-    func update(sensorOK: Bool, captureOK: Bool, displayName: String?, angle: Double, simulated: Bool) {
-        sensorRow.stringValue = (sensorOK ? "✅  Lid angle sensor found" : "❌  Lid angle sensor not found (Apple Silicon MacBook required) — demo/slider only")
-        captureRow.stringValue = (captureOK ? "✅  Screen Recording permission granted"
-                                            : "❌  Screen Recording permission missing — the effect will use the wallpaper instead of the real screen")
-        displayRow.stringValue = displayName.map { "✅  Built-in display: \($0)" } ?? "❌  No built-in display found"
-        angleRow.stringValue = String(format: "∠  Lid angle: %.0f°%@", angle, simulated ? " (simulated)" : "")
-        grantButton.isHidden = captureOK
+    /// Rounded translucent card around a content view.
+    private static func card(_ content: NSView) -> NSView {
+        let card = NSView()
+        card.wantsLayer = true
+        card.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        card.layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        card.layer?.borderWidth = 1
+        card.layer?.cornerRadius = 16
+        card.layer?.cornerCurve = .continuous
+        content.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
+            content.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
+        ])
+        return card
+    }
+
+    private func sliderRow(_ name: String, _ slider: NSSlider, target: AnyObject) -> NSView {
+        let label = NSTextField(labelWithString: name)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = NSColor.white.withAlphaComponent(0.85)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 128).isActive = true
+        let value = NSTextField(labelWithString: "")
+        value.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        value.textColor = NSColor.white.withAlphaComponent(0.6)
+        value.alignment = .right
+        value.translatesAutoresizingMaskIntoConstraints = false
+        value.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        slider.isContinuous = true
+        slider.target = target
+        slider.action = #selector(Controller.settingChanged(_:))
+        valueLabels[slider] = value
+        let row = NSStackView(views: [label, slider, value])
+        row.orientation = .horizontal; row.spacing = 10
+        return row
+    }
+
+    var sliders: (start: NSSlider, strength: NSSlider, blur: NSSlider, eye: NSSlider) {
+        (startSlider, strengthSlider, blurSlider, eyeSlider)
+    }
+
+    func refreshValues() {
+        valueLabels[startSlider]?.stringValue = String(format: "%.0f°", startSlider.doubleValue)
+        valueLabels[strengthSlider]?.stringValue = String(format: "%.0f %%", strengthSlider.doubleValue * 100)
+        valueLabels[blurSlider]?.stringValue = String(format: "%.0f pt", blurSlider.doubleValue)
+        valueLabels[eyeSlider]?.stringValue = String(format: "%+.1f H", eyeSlider.doubleValue)
+        gauge.triggerAngle = startSlider.doubleValue
+    }
+
+    func update(sensorOK: Bool, captureOK: Bool, displayName: String?, angle: Double, simulated: Bool, active: Bool) {
+        gauge.angle = angle
+        gauge.active = active
+        angleLabel.stringValue = String(format: "%.0f°", angle)
+        angleCaption.stringValue = active ? "folding — effect live" : (simulated ? "lid angle (simulated)" : "lid angle · trigger at \(Int(Config.startAngle))°")
+
+        let checks: [(Bool, String, String)] = [
+            (sensorOK, "Lid angle sensor", "Lid angle sensor not found — demo and slider only"),
+            (captureOK, "Screen Recording permission", "Screen Recording permission missing — wallpaper will be used"),
+            (displayName != nil, "Built-in display: \(displayName ?? "")", "No built-in display found"),
+        ]
+        for (i, (ok, good, bad)) in checks.enumerated() {
+            checkIcons[i].image = NSImage(systemSymbolName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
+            checkIcons[i].contentTintColor = ok ? NSColor(red: 0.3, green: 0.85, blue: 0.5, alpha: 1) : .systemOrange
+            checkLabels[i].stringValue = ok ? good : bad
+        }
+        fixButton.isHidden = captureOK
         hint.stringValue = captureOK
-            ? "Everything is ready. The app lives in the menu bar (∠). Close the lid to see the effect, or run the demo."
-            : "Grant the permission in System Settings → Privacy & Security → Screen Recording. MacDuo restarts itself once it is granted."
+            ? "All set. MacDuo lives in the menu bar (∠). Close the lid to see the effect, or run the demo."
+            : "System Settings → Privacy & Security → Screen Recording. MacDuo relaunches itself once access is granted."
     }
 }
 
@@ -383,6 +614,8 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        Config.load()
+        applyCommandLineOverrides()
         // The built-in display (the lid) — never an external screen.
         screen = NSScreen.screens.first { s in
             let id = (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
@@ -405,7 +638,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
         statusWindow = StatusWindow(demoAction: #selector(runDemo), target: self)
         if !CommandLine.arguments.contains("--no-window") { showStatusWindow() }
-        let statusTimer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in self?.refreshStatusWindow() }
+        let statusTimer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.refreshStatusWindow() }
         RunLoop.main.add(statusTimer, forMode: .common)
 
         let t = Timer(timeInterval: 1.0 / Config.pollHz, repeats: true) { [weak self] _ in self?.tick() }
@@ -429,7 +662,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         statusWindow.update(sensorOK: sensor != nil,
                             captureOK: CGPreflightScreenCaptureAccess(),
                             displayName: builtInDisplayFound ? screen.localizedName : nil,
-                            angle: rawAngle, simulated: simAngle != nil)
+                            angle: rawAngle, simulated: simAngle != nil, active: active)
     }
 
     @objc func showStatusWindow() {
@@ -437,6 +670,16 @@ final class Controller: NSObject, NSApplicationDelegate {
         statusWindow?.window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         refreshStatusWindow()
+    }
+
+    @objc func settingChanged(_ sender: NSSlider) {
+        guard let sw = statusWindow else { return }
+        Config.startAngle = sw.sliders.start.doubleValue.rounded()
+        Config.projectionStrength = sw.sliders.strength.doubleValue
+        Config.maxBlur = sw.sliders.blur.doubleValue
+        Config.eyeHeight = sw.sliders.eye.doubleValue
+        Config.save()
+        sw.refreshValues()
     }
 
     @objc func openScreenRecordingSettings() {
@@ -654,15 +897,19 @@ func arg(_ name: String) -> Double? {
     guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
     return Double(args[i + 1])
 }
-if let v = arg("--start") { Config.startAngle = v }
-if let v = arg("--full") { Config.fullAngle = v }
-if let v = arg("--blur") { Config.maxBlur = v }
-if let v = arg("--eye-distance") { Config.eyeDistance = v }
-if let v = arg("--eye-height") { Config.eyeHeight = v }
-if let v = arg("--demo-seconds") { Config.demoSeconds = v }
-if let v = arg("--smooth") { Config.smoothHz = v }
-if args.contains("--trace") { Config.trace = true }
-if let v = arg("--levels") { Config.blurLevels = Int(v) }
+/// Command-line flags win over values persisted from the status window.
+func applyCommandLineOverrides() {
+    if let v = arg("--start") { Config.startAngle = v }
+    if let v = arg("--full") { Config.fullAngle = v }
+    if let v = arg("--blur") { Config.maxBlur = v }
+    if let v = arg("--strength") { Config.projectionStrength = v }
+    if let v = arg("--eye-distance") { Config.eyeDistance = v }
+    if let v = arg("--eye-height") { Config.eyeHeight = v }
+    if let v = arg("--demo-seconds") { Config.demoSeconds = v }
+    if let v = arg("--smooth") { Config.smoothHz = v }
+    if args.contains("--trace") { Config.trace = true }
+    if let v = arg("--levels") { Config.blurLevels = Int(v) }
+}
 
 let app = NSApplication.shared
 let controller = Controller()

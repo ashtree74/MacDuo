@@ -51,6 +51,11 @@ The stretch you see is not an arbitrary factor either — it falls out of the ey
 the eye (`--eye-height`) and the far edge stretches more; move it closer (`--eye-distance`) and
 the perspective gets stronger.
 
+The exact geometry can feel too eager (the far edge shoots up quickly), so a **projection
+strength** knob scales δ before it enters the homography: 100% is the exact geometry, the
+default 60% is gentler. It is a slider in the status window and `--strength` on the command
+line.
+
 ## The lid angle sensor
 
 Apple Silicon MacBooks (and the 2019 16" MBP) expose a lid angle sensor as a HID device:
@@ -98,13 +103,18 @@ open build/MacDuo.app   # lives in the menu bar (∠), no Dock icon
 
 Requires macOS 14+ and an Apple Silicon MacBook (for the sensor; the demo works anywhere).
 
-On launch a status window checks the three things the effect needs:
+On launch a status window shows a live gauge of the lid angle (side profile of the laptop with
+the trigger angle marked), the three checks the effect needs, and tuning sliders:
 
 - lid angle sensor found,
 - **Screen Recording** permission (System Settings → Privacy & Security → Screen Recording;
   without it the wallpaper is used instead of the real screen). MacDuo requests it at launch and
-  relaunches itself once it is granted.
+  relaunches itself once it is granted; a "Grant access…" button opens the right pane.
 - built-in display present.
+
+Sliders: **Trigger angle** (60–125°), **Projection strength** (0–100%), **Blur** (0–160 pt),
+**Eye height** (−0.5…+1.5 H). Values are saved in UserDefaults (`pl.jesion.macduo`) and
+restored on the next launch; command-line flags override them.
 
 `build.sh` signs the app with a Developer ID / Apple Development certificate from your keychain
 if one exists (locally, no notarization). This matters: an ad-hoc signature's designated
@@ -126,6 +136,7 @@ build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 25 --eye-distance 2.6 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--start` | 100 | lid angle (°) that triggers the effect |
+| `--strength` | 0.6 | projection strength: 1 = exact eye geometry, lower = gentler |
 | `--full` | 25 | angle at which blur/fade are fully applied |
 | `--eye-distance` | 2.6 | eye distance from the screen center, in screen heights (≈56 cm on a 16") |
 | `--eye-height` | 0.5 | eye height above the screen center, in screen heights |
@@ -144,6 +155,18 @@ build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 25 --eye-distance 2.6 
   120 Hz on an M5 Max, longest frame ~40 ms (the first one, when the screenshot is uploaded).
 - The real fps killer was updating the menu bar title on every degree — a synchronous round-trip
   to the system that dropped the effect to 35 fps. It is now throttled to 4 updates/s.
+
+## Why a screenshot, and could it be live?
+
+The overlay shows a still screenshot taken at the trigger angle. A live version is possible:
+ScreenCaptureKit's `SCStream` delivers the display's frames continuously (up to the display's
+refresh rate, as IOSurface-backed pixel buffers) with our own overlay window excluded from the
+capture, so there is no feedback loop. Feeding each frame into the plane's `contents` would make
+the folded image live — cursor, animations, video, everything — at the cost of one or two
+frames of latency and a permanent capture pipeline while the effect runs. There is no way to
+render the window server's composited desktop into a texture other than the capture APIs, so
+"a virtual buffer with the real screen in it" is exactly what `SCStream` is. It is the natural
+next step for this prototype.
 
 ## Known limitations
 
