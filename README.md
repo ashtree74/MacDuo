@@ -2,8 +2,9 @@
 
 The iPhone Duo "lid closing" transition, recreated on a MacBook.
 
-When you close the lid, the screen grabs a screenshot of itself and re-projects it so that the
-image appears to **stay where the screen was** while the physical lid rotates through it. The
+When you close the lid, the display captures itself — live, not a screenshot — and re-projects
+the picture so that it appears to **stay where the screen was** while the physical lid rotates
+through it. The
 far edge blurs progressively and fades to black; the hinge edge stays sharp. Open the lid and the
 effect unfolds back into the live desktop.
 
@@ -75,20 +76,27 @@ update. One gotcha: the `IOHIDManager` must be kept alive as long as the device 
 ## Pipeline
 
 1. **Poll** the sensor at 120 Hz.
-2. **Trigger** when the raw angle crosses `startAngle` (100°) downward. Grab the built-in
-   display with ScreenCaptureKit (150–300 ms; the app's own windows are excluded).
-3. **Smooth.** The sensor gives whole degrees, so the raw angle goes through a critically damped
+2. **Arm** the live capture when the lid starts closing within 12° of the threshold: an
+   `SCStream` of the built-in display starts (200–300 ms), with the app's own windows excluded
+   from the filter so the overlay never captures itself. It is dropped again if the lid moves
+   away or sits still for 15 s.
+3. **Trigger** when the raw angle crosses `startAngle` (100°) downward. If the stream is already
+   delivering, the effect starts on the same frame (measured: 0 ms); otherwise it waits for the
+   first frame. Every captured frame arrives as an IOSurface-backed pixel buffer and goes straight
+   into the plane's layer contents — the folded image is the real, live screen: cursor,
+   animations, video. `--still` switches back to a single screenshot.
+4. **Smooth.** The sensor gives whole degrees, so the raw angle goes through a critically damped
    spring filter (`smoothHz`, 4.5 Hz). Steps disappear; during continuous motion the filter keeps
    the velocity, so the lag is small (~70 ms) and constant. Rendering runs on the built-in
    display's `CADisplayLink` (120 Hz on ProMotion).
-4. **Project.** Every frame, compute the homography for δ = θ0 − θ and set it as the plane's
+5. **Project.** Every frame, compute the homography for δ = θ0 − θ and set it as the plane's
    transform.
-5. **Blur & fade.** `progress = (startAngle − θ) / (startAngle − fullAngle)` drives five
+6. **Blur & fade.** `progress = (startAngle − θ) / (startAngle − fullAngle)` drives five
    `CIGaussianBlur` layers with growing radii (up to 120 pt), each with a gradient mask — sharp at
    the hinge, strongest at the far edge. The blurred layers sit on a transparent margin so the
    halo bleeds past the panel outline. A gradient fades the far edge (and the halo above it) to
    full black.
-6. **Release.** When the lid opens above `startAngle + 6°`, progress returns to 0 (the "unfold")
+7. **Release.** When the lid opens above `startAngle + 6°`, progress returns to 0 (the "unfold")
    and the overlay hides. The log prints fps statistics.
 
 Only the **built-in display** is ever captured or covered (`CGDisplayIsBuiltin`); external
@@ -146,6 +154,7 @@ build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 25 --eye-distance 2.6 
 | `--demo`, `--demo-seconds` | | run the demo after launch |
 | `--hold N` | | 120° for a second, then a fixed angle N (for measurements) |
 | `--trace` | | log raw and smoothed angle every frame |
+| `--still` | | single screenshot at the trigger instead of live capture |
 | `--no-window` | | don't show the status window at launch |
 
 ## Performance notes
@@ -156,23 +165,24 @@ build/MacDuo.app/Contents/MacOS/MacDuo --start 100 --full 25 --eye-distance 2.6 
 - The real fps killer was updating the menu bar title on every degree — a synchronous round-trip
   to the system that dropped the effect to 35 fps. It is now throttled to 4 updates/s.
 
-## Why a screenshot, and could it be live?
+## Live capture instead of a screenshot
 
-The overlay shows a still screenshot taken at the trigger angle. A live version is possible:
-ScreenCaptureKit's `SCStream` delivers the display's frames continuously (up to the display's
-refresh rate, as IOSurface-backed pixel buffers) with our own overlay window excluded from the
-capture, so there is no feedback loop. Feeding each frame into the plane's `contents` would make
-the folded image live — cursor, animations, video, everything — at the cost of one or two
-frames of latency and a permanent capture pipeline while the effect runs. There is no way to
-render the window server's composited desktop into a texture other than the capture APIs, so
-"a virtual buffer with the real screen in it" is exactly what `SCStream` is. It is the natural
-next step for this prototype.
+There is no way to render the window server's composited desktop into a texture other than the
+capture APIs, so "a virtual buffer with the real screen in it" is exactly what ScreenCaptureKit's
+`SCStream` is. It delivers the display's frames continuously (up to the refresh rate, only when
+something changed) as IOSurface-backed pixel buffers, with our own overlay excluded from the
+capture, so there is no feedback loop. The display link picks up the newest surface each frame
+and sets it as the layer contents of the sharp and blurred planes. Cost: one or two frames of
+latency and a capture pipeline running while the lid is closing. Measured with the demo: 120 fps,
+longest frame 17 ms (better than the screenshot path, which had to upload a full-size image on
+the first frame).
 
 ## Known limitations
 
-- A real close eventually puts the Mac to sleep. On wake the overlay still shows the old
-  screenshot for a moment and animates the unfold into the live desktop.
-- The screenshot takes ~0.2 s, so a very fast slam may clip the start of the effect. Raise
+- A real close eventually puts the Mac to sleep. On wake the overlay still shows the folded
+  (live) desktop and animates the unfold.
+- Starting the live stream takes ~0.2 s. It is pre-armed while the lid is closing towards the
+  threshold, but a very fast slam from wide open may still clip the start of the effect. Raise
   `--start` if that bothers you.
 - The eye position is a guess (`--eye-distance`, `--eye-height`). The geometry is exact for that
   eye; a different posture wants different values.

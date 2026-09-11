@@ -32,6 +32,8 @@ struct Config {
     static var demoSeconds: Double = 1.3    // closing/opening duration in the demo
     static var blurLevels = 5               // number of progressive blur layers (0 = no blur)
     static var trace = false                // log raw and smoothed angle every frame
+    static var live = true                  // live SCStream capture (false = single screenshot at the trigger)
+    static var armMargin: Double = 12       // start the live stream this many degrees above startAngle (pre-warm)
 
     /// Settings adjustable from the status window, persisted across launches.
     static func load() {
@@ -96,7 +98,7 @@ final class LidAngleSensor {
 enum Screenshot {
     static func capture(display: CGDirectDisplayID, scale: CGFloat) async -> CGImage? {
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             guard let d = content.displays.first(where: { $0.displayID == display }) else { return nil }
             let me = content.applications.filter { $0.processID == getpid() }
             let filter = SCContentFilter(display: d, excludingApplications: me, exceptingWindows: [])
@@ -117,6 +119,103 @@ enum Screenshot {
         guard let url = NSWorkspace.shared.desktopImageURL(for: screen),
               let img = NSImage(contentsOf: url) else { return nil }
         return img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+    }
+}
+
+// MARK: - Live capture
+
+/// Continuous capture of the built-in display through ScreenCaptureKit. Our own windows are excluded from the
+/// filter, so the overlay never captures itself. Frames arrive as IOSurface-backed pixel buffers and are handed
+/// straight to Core Animation as layer contents — the "virtual buffer with the real screen in it".
+final class LiveCapture: NSObject, SCStreamOutput, SCStreamDelegate {
+    private var stream: SCStream?
+    private let queue = DispatchQueue(label: "macduo.capture", qos: .userInteractive)
+    private let lock = NSLock()
+    private var latest: CMSampleBuffer?
+    private var inUse: [CMSampleBuffer] = []   // keeps surfaces CA may still be displaying out of the stream's pool
+    private var firstDelivered = false
+    private(set) var frames = 0
+    private(set) var isRunning = false
+    var onFirstFrame: (() -> Void)?
+    var hasFrame: Bool { lock.lock(); defer { lock.unlock() }; return firstDelivered }
+
+    func start(display: CGDirectDisplayID, scale: CGFloat) async -> Bool {
+        guard stream == nil else { return true }
+        do {
+            // onScreenWindowsOnly must be false: while arming, none of our windows is on screen yet, and an app
+            // without on-screen windows is missing from `applications` — the overlay would then capture itself.
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard let d = content.displays.first(where: { $0.displayID == display }) else { return false }
+            let me = content.applications.filter { $0.processID == getpid() }
+            let myWindows = content.windows.filter { $0.owningApplication?.processID == getpid() }
+            log("Live capture: excluding \(me.count) app entry(ies), \(myWindows.count) own window(s) known to ScreenCaptureKit.")
+            let filter = SCContentFilter(display: d, excludingApplications: me, exceptingWindows: [])
+            let cfg = SCStreamConfiguration()
+            cfg.width = Int(CGFloat(d.width) * scale)
+            cfg.height = Int(CGFloat(d.height) * scale)
+            cfg.minimumFrameInterval = CMTime(value: 1, timescale: 120)
+            cfg.pixelFormat = kCVPixelFormatType_32BGRA
+            cfg.queueDepth = 6
+            cfg.showsCursor = true
+            cfg.captureResolution = .best
+            let st = SCStream(filter: filter, configuration: cfg, delegate: self)
+            try st.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+            try await st.startCapture()
+            stream = st
+            isRunning = true
+            return true
+        } catch {
+            log("Live capture failed: \(error)")
+            return false
+        }
+    }
+
+    func stop() {
+        guard let st = stream else { return }
+        stream = nil
+        isRunning = false
+        Task { try? await st.stopCapture() }
+        lock.lock(); latest = nil; inUse.removeAll(); firstDelivered = false; frames = 0; lock.unlock()
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, sb.isValid, CMSampleBufferGetImageBuffer(sb) != nil else { return }
+        // Only frames with new content; idle/blank frames carry no image update.
+        if let atts = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+           let raw = atts.first?[.status] as? Int, let status = SCFrameStatus(rawValue: raw), status != .complete { return }
+        lock.lock()
+        latest = sb
+        frames += 1
+        let first = !firstDelivered
+        firstDelivered = true
+        lock.unlock()
+        if first, let cb = onFirstFrame { DispatchQueue.main.async(execute: cb) }
+    }
+
+    /// The newest surface since the last call, or nil if nothing new arrived.
+    func takeLatestSurface() -> IOSurface? {
+        lock.lock(); defer { lock.unlock() }
+        guard let sb = latest, let pb = CMSampleBufferGetImageBuffer(sb),
+              let surface = CVPixelBufferGetIOSurface(pb)?.takeUnretainedValue() else { return nil }
+        latest = nil
+        inUse.append(sb)
+        if inUse.count > 3 { inUse.removeFirst() }
+        if Config.trace, frames % 30 == 0 {
+            IOSurfaceLock(surface, .readOnly, nil)
+            let base = IOSurfaceGetBaseAddress(surface).assumingMemoryBound(to: UInt8.self)
+            let bpr = IOSurfaceGetBytesPerRow(surface), w = IOSurfaceGetWidth(surface), h = IOSurfaceGetHeight(surface)
+            var sum = 0
+            for i in 0..<64 { let x = w * i / 64, y = h * i / 64; let p = base + y * bpr + x * 4; sum += Int(p[0]) + Int(p[1]) + Int(p[2]) }
+            IOSurfaceUnlock(surface, .readOnly, nil)
+            log(String(format: "capture frame %d: %dx%d fmt=%08x mean=%.1f", frames, w, h, IOSurfaceGetPixelFormat(surface), Double(sum) / 192))
+        }
+        return surface
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        log("Live capture stopped: \(error)")
+        isRunning = false
+        self.stream = nil
     }
 }
 
@@ -255,6 +354,20 @@ final class FoldOverlay {
         apply(progress: 0, delta: 0)
         CATransaction.commit()
         window.orderFrontRegardless()
+    }
+
+    /// Live mode: contents are swapped every frame from the capture stream.
+    func show(surface: IOSurface) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        setContents(surface)
+        apply(progress: 0, delta: 0)
+        CATransaction.commit()
+        window.orderFrontRegardless()
+    }
+
+    func setContents(_ surface: IOSurface) {
+        sharp.contents = surface
+        for level in blurLevels { level.container.sublayers?.first?.contents = surface }
     }
 
     func hide() { window.orderOut(nil) }
@@ -589,6 +702,10 @@ final class Controller: NSObject, NSApplicationDelegate {
     private var sensor: LidAngleSensor?
     private var statusItem: NSStatusItem!
     private var overlay: FoldOverlay?
+    private let capture = LiveCapture()
+    private var arming = false
+    private var lastMotionTime = CACurrentMediaTime()
+    private var armedAt = CACurrentMediaTime()
     private var statusWindow: StatusWindow?
     private var screen: NSScreen!
     private var displayID: CGDirectDisplayID = 0
@@ -734,6 +851,27 @@ final class Controller: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Pre-warm the live stream when the lid is closing towards the threshold; drop it when it moves well
+        // away or just sits there (the stream is cheap when idle, but not free).
+        if angle != lastAngle { lastMotionTime = CACurrentMediaTime() }
+        if Config.live, !active, !arming {
+            let movingDown = angle < lastAngle
+            if movingDown, angle < Config.startAngle + Config.armMargin, angle >= Config.startAngle, !capture.isRunning {
+                arming = true
+                armedAt = CACurrentMediaTime()
+                let id = displayID, scale = screen.backingScaleFactor
+                Task { @MainActor in
+                    let ok = await self.capture.start(display: id, scale: scale)
+                    self.arming = false
+                    log(ok ? "Live capture armed (lid at \(self.rawAngle)°)." : "Live capture could not be armed.")
+                }
+            } else if capture.isRunning,
+                      angle > Config.startAngle + Config.armMargin + 8 || CACurrentMediaTime() - lastMotionTime > 15 {
+                capture.stop()
+                log("Live capture disarmed (lid at \(angle)°).")
+            }
+        }
+
         // Trigger: the raw reading crosses the threshold downward (raw, so no filter lag).
         if !active, !capturing, lastAngle >= Config.startAngle, angle < Config.startAngle {
             trigger()
@@ -763,6 +901,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         guard active, let overlay else { return }
         frameCount += 1
         maxFrameDt = max(maxFrameDt, dt)
+        if Config.live, let surface = capture.takeLatestSurface() { overlay.setContents(surface) }
 
         // Target: 0 at startAngle, 1 at fullAngle (linear in the smoothed lid angle).
         let span = Config.startAngle - Config.fullAngle
@@ -779,9 +918,10 @@ final class Controller: NSObject, NSApplicationDelegate {
             active = false
             displayedProgress = 0
             overlay.hide()
+            if capture.isRunning, rawAngle > Config.startAngle + Config.armMargin { capture.stop() }
             let secs = CACurrentMediaTime() - activeSince
-            log(String(format: "Lid opened — overlay hidden. %d frames in %.1f s = %.0f fps, longest frame %.0f ms; apply avg %.2f ms/frame; HID read avg %.2f ms (%d reads); menu bar title avg %.2f ms (%d changes).",
-                       frameCount, secs, Double(frameCount) / secs, maxFrameDt * 1000,
+            log(String(format: "Lid opened — overlay hidden. %d frames in %.1f s = %.0f fps, longest frame %.0f ms; live frames captured %d; apply avg %.2f ms/frame; HID read avg %.2f ms (%d reads); menu bar title avg %.2f ms (%d changes).",
+                       frameCount, secs, Double(frameCount) / secs, maxFrameDt * 1000, capture.frames,
                        applyTime / Double(max(frameCount, 1)) * 1000, readTime / Double(max(readCount, 1)) * 1000, readCount,
                        statusTime / Double(max(statusCount, 1)) * 1000, statusCount))
         }
@@ -789,10 +929,36 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     private func trigger() {
         capturing = true
-        log("Threshold \(Config.startAngle)° crossed (angle \(rawAngle)°) — taking a screenshot…")
+        let t0 = CACurrentMediaTime()
         let scale = screen.backingScaleFactor
         let id = displayID
-        let t0 = CACurrentMediaTime()
+        if Config.live {
+            log("Threshold \(Config.startAngle)° crossed (angle \(rawAngle)°) — live capture…")
+            Task { @MainActor in
+                let ok = await self.capture.start(display: id, scale: scale)
+                guard ok else {
+                    log("Live capture unavailable — falling back to a screenshot.")
+                    self.captureStill(t0: t0, scale: scale, id: id)
+                    return
+                }
+                let begin: () -> Void = { [weak self] in
+                    guard let self, self.capturing else { return }
+                    guard let surface = self.capture.takeLatestSurface() else { return }
+                    self.capturing = false
+                    guard self.rawAngle < Config.startAngle + Config.hysteresis else { log("Cancelled (lid open again)."); return }
+                    log(String(format: "Live frame ready in %.0f ms (%dx%d) — starting the effect.", (CACurrentMediaTime() - t0) * 1000, surface.width, surface.height))
+                    self.startEffect()
+                    self.overlay?.show(surface: surface)
+                }
+                if self.capture.hasFrame { begin() } else { self.capture.onFirstFrame = begin }
+            }
+        } else {
+            log("Threshold \(Config.startAngle)° crossed (angle \(rawAngle)°) — taking a screenshot…")
+            captureStill(t0: t0, scale: scale, id: id)
+        }
+    }
+
+    private func captureStill(t0: Double, scale: CGFloat, id: CGDirectDisplayID) {
         Task { @MainActor in
             var img = await Screenshot.capture(display: id, scale: scale)
             var source = "ScreenCaptureKit"
@@ -803,14 +969,18 @@ final class Controller: NSObject, NSApplicationDelegate {
                 return
             }
             log(String(format: "Screenshot ready in %.0f ms (%@, %dx%d) — starting the effect.", (CACurrentMediaTime() - t0) * 1000, source, img.width, img.height))
-            self.displayedProgress = 0
-            self.frameCount = 0
-            self.maxFrameDt = 0
-            self.applyTime = 0; self.readTime = 0; self.readCount = 0; self.statusTime = 0; self.statusCount = 0
-            self.activeSince = CACurrentMediaTime()
-            self.active = true
+            self.startEffect()
             self.overlay?.show(image: img)
         }
+    }
+
+    private func startEffect() {
+        displayedProgress = 0
+        frameCount = 0
+        maxFrameDt = 0
+        applyTime = 0; readTime = 0; readCount = 0; statusTime = 0; statusCount = 0
+        activeSince = CACurrentMediaTime()
+        active = true
     }
 
     // MARK: Menu / simulation
@@ -909,6 +1079,7 @@ func applyCommandLineOverrides() {
     if let v = arg("--smooth") { Config.smoothHz = v }
     if args.contains("--trace") { Config.trace = true }
     if let v = arg("--levels") { Config.blurLevels = Int(v) }
+    if args.contains("--still") { Config.live = false }
 }
 
 let app = NSApplication.shared
