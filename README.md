@@ -106,17 +106,16 @@ screens are untouched. The startup log lists every display and which one is used
 
 ## Download
 
-Prebuilt, Developer ID-signed DMGs are on the [Releases page](https://github.com/ashtree74/MacDuo/releases).
-Open the DMG and drag MacDuo to Applications. Until a release is notarized, macOS will refuse the
-first launch: go to System Settings → Privacy & Security and click **Open Anyway**, or run
-`xattr -d com.apple.quarantine /Applications/MacDuo.app`.
+Prebuilt DMGs, signed with a Developer ID and notarized by Apple, are on the
+[Releases page](https://github.com/ashtree74/MacDuo/releases). Open the DMG and drag MacDuo to
+Applications; it launches without Gatekeeper warnings.
 
 ## Build & run
 
 ```sh
 ./build.sh              # builds build/MacDuo.app with swiftc — no Xcode project
 open build/MacDuo.app   # lives in the menu bar (∠), no Dock icon
-./release.sh 0.1.0      # signed DMG + GitHub release (NOTARY_PROFILE=<keychain profile> to notarize)
+NOTARY_PROFILE=<notarytool keychain profile> ./release.sh 0.1.0   # signed + notarized DMG, GitHub release
 ```
 
 Requires macOS 14+ and an Apple Silicon MacBook (for the sensor; the demo works anywhere).

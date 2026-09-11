@@ -2,10 +2,11 @@
 # Builds a signed (and, if credentials are available, notarized) DMG and publishes it as a GitHub Release.
 #
 #   ./release.sh 0.1.0                       # sign + DMG + GitHub release (marked pre-release if not notarized)
-#   NOTARY_PROFILE=macduo ./release.sh 0.1.0 # also notarize with `xcrun notarytool` and staple
+#   NOTARY_PROFILE=Groundbox-Notary ./release.sh 0.1.0   # also notarize with `xcrun notarytool` and staple
 #
-# One-time setup for notarization (Apple ID with an app-specific password, Team ID from the certificate):
-#   xcrun notarytool store-credentials macduo --apple-id you@example.com --team-id 4NZF9USX28
+# A notarytool keychain profile belongs to an Apple ID, not to an app, so any existing profile for the
+# team works. One-time setup (Apple ID with an app-specific password, Team ID from the certificate):
+#   xcrun notarytool store-credentials <profile> --apple-id you@example.com --team-id 4NZF9USX28
 set -e
 cd "$(dirname "$0")"
 VERSION=${1:?usage: release.sh <version>}
@@ -25,6 +26,18 @@ codesign -s "$IDENTITY" -f --options runtime --timestamp "$APP"
 codesign --verify --deep --strict "$APP"
 echo "Signed: $IDENTITY"
 
+NOTARIZED=0
+if [ -n "$NOTARY_PROFILE" ]; then
+  # Notarize and staple the app itself first, so the copy inside the DMG carries its ticket offline.
+  ZIP=build/MacDuo-$VERSION-notarization.zip
+  rm -f "$ZIP"
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+  xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  NOTARIZED=1
+fi
+
 rm -f "$DMG"
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/"
@@ -34,12 +47,11 @@ rm -rf "$STAGE"
 codesign -s "$IDENTITY" --timestamp "$DMG"
 echo "DMG: $DMG ($(du -h "$DMG" | cut -f1))"
 
-NOTARIZED=0
-if [ -n "$NOTARY_PROFILE" ]; then
+if [ $NOTARIZED = 1 ]; then
   xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
   spctl --assess --type open --context context:primary-signature -v "$DMG"
-  NOTARIZED=1
   echo "Notarized and stapled."
 else
   echo "NOTARY_PROFILE not set — skipping notarization (Gatekeeper will warn on first open)."
@@ -57,6 +69,7 @@ else
 fi
 if gh release view "v$VERSION" >/dev/null 2>&1; then
   gh release upload "v$VERSION" "$DMG" --clobber
+  if [ $NOTARIZED = 1 ]; then gh release edit "v$VERSION" --prerelease=false --notes "$NOTES"; fi
 else
   gh release create "v$VERSION" "$DMG" --title "MacDuo $VERSION" --notes "$NOTES" $PRE
 fi
