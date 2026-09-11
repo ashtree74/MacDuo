@@ -15,9 +15,6 @@ effect follows your hand.
 
 ![The effect: the live desktop folds away as the lid closes](docs/demo.gif)
 
-*Demo run (simulated lid sweep 120° → 3° → 120°): the far edge recedes, blurs and fades to
-black while the hinge edge stays sharp. Recorded on the built-in display at 120 fps.*
-
 ## What the iPhone Duo does
 
 The Duo does not cut between its outer and inner displays. The UI on the folding half is
